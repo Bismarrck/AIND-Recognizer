@@ -13,10 +13,15 @@ class ModelSelector(object):
     base class for model selection (strategy design pattern)
     '''
 
-    def __init__(self, all_word_sequences: dict, all_word_Xlengths: dict, this_word: str,
+    def __init__(self,
+                 all_word_sequences: dict,
+                 all_word_Xlengths: dict,
+                 this_word: str,
                  n_constant=3,
-                 min_n_components=2, max_n_components=10,
-                 random_state=14, verbose=False):
+                 min_n_components=2,
+                 max_n_components=10,
+                 random_state=14,
+                 verbose=False):
         self.words = all_word_sequences
         self.hwords = all_word_Xlengths
         self.sequences = all_word_sequences[this_word]
@@ -36,14 +41,20 @@ class ModelSelector(object):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
         # warnings.filterwarnings("ignore", category=RuntimeWarning)
         try:
-            hmm_model = GaussianHMM(n_components=num_states, covariance_type="diag", n_iter=1000,
-                                    random_state=self.random_state, verbose=False).fit(self.X, self.lengths)
+            hmm_model = GaussianHMM(
+                n_components=num_states,
+                covariance_type="diag",
+                n_iter=1000,
+                random_state=self.random_state,
+                verbose=False).fit(self.X, self.lengths)
             if self.verbose:
-                print("model created for {} with {} states".format(self.this_word, num_states))
+                print("model created for {} with {} states".format(
+                    self.this_word, num_states))
             return hmm_model
         except:
             if self.verbose:
-                print("failure on {} with {} states".format(self.this_word, num_states))
+                print("failure on {} with {} states".format(
+                    self.this_word, num_states))
             return None
 
 
@@ -62,7 +73,8 @@ class SelectorConstant(ModelSelector):
 
 
 class SelectorBIC(ModelSelector):
-    """ select the model with the lowest Bayesian Information Criterion(BIC) score
+    """
+    select the model with the lowest Bayesian Information Criterion(BIC) score
 
     http://www2.imm.dtu.dk/courses/02433/doc/ch6_slides.pdf
     Bayesian information criteria: BIC = -2 * logL + p * logN
@@ -76,33 +88,106 @@ class SelectorBIC(ModelSelector):
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        best_score = float('inf')
+        best_model = None
+
+        for n_states in range(self.min_n_components, self.max_n_components + 1):
+
+            try:
+                N, M = self.X.shape
+                model = self.base_model(num_states=n_states)
+                assert isinstance(model, GaussianHMM)
+                logL = model.score(self.X, self.lengths)
+                p = n_states ** 2 + 2 * M * n_states - 1
+                score = -2 * logL + p * np.log(N)
+            except:
+                pass
+            else:
+                if score < best_score:
+                    best_score = score
+                    best_model = model
+
+        return best_model
 
 
 class SelectorDIC(ModelSelector):
-    ''' select best model based on Discriminative Information Criterion
+    '''
+    select best model based on Discriminative Information Criterion
 
-    Biem, Alain. "A model selection criterion for classification: Application to hmm topology optimization."
-    Document Analysis and Recognition, 2003. Proceedings. Seventh International Conference on. IEEE, 2003.
-    http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.58.6208&rep=rep1&type=pdf
+    Biem, Alain. "A model selection criterion for classification: Application
+    to hmm topology optimization." Document Analysis and Recognition, 2003.
+    Proceedings. Seventh International Conference on. IEEE, 2003.
     DIC = log(P(X(i)) - 1/(M-1)SUM(log(P(X(all but i))
     '''
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        best_score = float('-inf')
+        best_model = None
+
+        for n_states in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                model = self.base_model(num_states=n_states)
+                assert isinstance(model, GaussianHMM)
+                logL = model.score(self.X, self.lengths)
+                means = np.mean([
+                    model.score(*self.hwords[word])
+                    for word in self.words if word != self.this_word]
+                )
+                score = logL - means
+            except:
+                pass
+            else:
+                if score > best_score:
+                    best_score = score
+                    best_model = model
+
+        return best_model
 
 
 class SelectorCV(ModelSelector):
-    ''' select best model based on average log Likelihood of cross-validation folds
+    '''
+    select best model based on average log Likelihood of cross-validation folds
 
     '''
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection using CV
-        raise NotImplementedError
+        min_num_states = 3
+        best_score = float('-inf')
+        best_model = self.base_model(num_states=min_num_states)
+
+        if len(self.sequences) < min_num_states:
+            return best_model
+
+        for n_states in range(self.min_n_components, self.max_n_components + 1):
+            state_scores = []
+            kf = KFold()
+
+            for train_index, test_index in kf.split(self.sequences):
+                model = self.base_model(num_states=n_states)
+                assert isinstance(model, GaussianHMM)
+
+                X_train, train_lengths = combine_sequences(
+                    train_index, self.sequences)
+                X_test, test_lengths = combine_sequences(
+                    test_index, self.sequences)
+                model.fit(X_train, train_lengths)
+
+                try:
+                    state_scores.append(model.score(X_test, test_lengths))
+                except:
+                    pass
+
+            try:
+                score = statistics.mean(state_scores)
+            except:
+                score = float('inf')
+
+            if score > best_score:
+                best_score = score
+                best_model = model
+
+        return best_model
